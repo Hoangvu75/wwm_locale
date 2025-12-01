@@ -1,0 +1,85 @@
+# The action to pack words_map files to locale words_map file
+
+name: Pack words_map files
+
+on:
+  workflow_dispatch:
+    inputs:
+      words_map: 
+        description: 'URL download original words_map'
+        required: true
+        default: ""
+        type: string
+      words_map_patched:
+        description: 'URL download patched zip file'
+        required: true
+        default: ""
+        type: string
+      output_filename:
+        description: 'The locale filename'
+        required: false
+        default: 'translate_words_map_en'
+        type: string
+
+jobs:
+  pack:
+    name: Pack words_map files
+    runs-on: macos-15
+    permissions:
+      contents: write
+
+    steps:
+      - name: Prepare workspace
+        uses: actions/checkout@v6
+
+      - name: Download files
+        run: |
+          mkdir -p ./works
+          curl -L '${{ github.event.inputs.words_map }}' -o ./works/words_map
+          curl -L '${{ github.event.inputs.words_map_patched }}' -o ./works/patched.zip
+
+      - name: Prepare packing
+        run: |
+          chmod +x ./bin/yanyun
+          ./bin/yanyun ./works/words_map > ./works/pack_log.log 2>&1
+
+          mkdir -p ./works/patch
+          mkdir -p ./works/tmp ; unzip ./works/patched.zip -d ./works/tmp
+          FIRST_CHILD=$(ls ./works/tmp | head -n 1)
+          if [ -d "./works/tmp/$FIRST_CHILD" ]; then
+            mv ./works/tmp/$FIRST_CHILD/* ./works/patch/
+          else
+            mv ./works/tmp/* ./works/patch/
+          fi
+          rm -rf ./works/tmp
+          python3 ./scripts/merge-text.py ./output/words_map ./works/patch 
+
+      - name: Create packed
+        run: |
+          ./bin/yanyun ./output/words_map > ./works/packed.log 2>&1
+          # check exist file ./output/words_map/merged/words_map
+          if [ ! -f "./output/words_map/merged/words_map" ]; then
+            echo "Packing failed: merged words_map file not found."
+            exit 1
+          fi
+          mkdir -p ./works/locale
+          mv ./output/words_map/merged/words_map ./works/locale/${{ github.event.inputs.output_filename }}
+          cp ./archive/words_map_diff ./works/locale/${{ github.event.inputs.output_filename }}_diff
+        
+      - name: Verify packed files
+        run: |
+          echo "Verifying packed files..."
+          ls -l ./works/locale/
+          echo "Packed files ready."
+
+      - name: Archive packed files
+        run: |
+          cd ./works ; zip -r ${{ github.event.inputs.output_filename }}.zip ./locale
+
+      - name: Save to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true # not publish immediately
+          files: ./works/${{ github.event.inputs.output_filename }}.zip
+          name: ${{ github.event.inputs.output_filename }}-${{ github.run_number }}
+          tag_name: packed-${{ github.run_number }}

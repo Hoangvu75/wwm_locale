@@ -1,0 +1,64 @@
+# The action to unpack a words_map file
+
+name: Unpack words_map file
+
+on:
+  workflow_dispatch:
+    inputs:
+      words_map:
+        description: 'URL download words_map'
+        required: true
+        default: ""
+        type: string
+
+jobs:
+  unpack:
+    name: Unpack words_map
+    runs-on: macos-15
+    permissions:
+      contents: write
+
+    steps:
+      - name: Prepare workspace
+        uses: actions/checkout@v6
+
+      - name: Download words_map file
+        run: |
+          mkdir -p ./works
+          curl -L '${{ github.event.inputs.words_map }}' -o ./works/words_map
+
+      - name: Unpack words_map
+        run: |
+          chmod +x ./bin/yanyun
+          ./bin/yanyun ./works/words_map > ./works/unpack_log.log 2>&1
+
+      - name: Count unpacked files
+        run: |
+          mkdir -p ./output/words_map/text
+          FILE_COUNT=$(ls ./output/words_map/text | wc -l | tr -d ' ')
+          echo "Unpacked $FILE_COUNT files."
+          echo "FILE_COUNT=$FILE_COUNT" >> $GITHUB_ENV
+      
+      - name: Zip words_map text files
+        env:
+          FILE_COUNT: ${{ env.FILE_COUNT }}
+        if: ${{ env.FILE_COUNT != '0' }}
+        run: |
+          cd ./output/words_map ; zip -r ../unpacked_words_map.zip ./text
+
+      - name: Report no files unpacked
+        env:
+          FILE_COUNT: ${{ env.FILE_COUNT }}
+        if: ${{ env.FILE_COUNT == '0' }}
+        run: |
+          echo "No files were unpacked from the words_map."
+          exit 1
+
+      - name: Save to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true # not publish immediately
+          files: ./output/unpacked_words_map.zip
+          name: unpacked_words_map-${{ github.run_number }}
+          tag_name: unpacked-${{ github.run_number }}
+
