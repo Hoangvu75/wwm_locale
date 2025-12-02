@@ -1,0 +1,109 @@
+# Workflow to translate Chinese text files to Vietnamese
+
+name: Translate to Vietnamese
+
+on:
+  workflow_dispatch:
+    inputs:
+      json_files_url:
+        description: 'URL to download JSON files (zip file or single JSON)'
+        required: true
+        default: ""
+        type: string
+      is_zip:
+        description: 'Is the file a zip archive?'
+        required: true
+        default: true
+        type: boolean
+
+jobs:
+  translate:
+    name: Translate Chinese to Vietnamese
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Prepare workspace
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Python dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Download JSON files
+        run: |
+          mkdir -p ./works/input
+          curl -L '${{ github.event.inputs.json_files_url }}' -o ./works/downloaded_file
+
+      - name: Extract files if zip
+        if: ${{ github.event.inputs.is_zip == 'true' }}
+        run: |
+          cd ./works
+          unzip downloaded_file -d ./extracted
+          # Move files from extracted folder to input folder
+          find ./extracted -name "*.json" -exec cp {} ./input/ \;
+          rm -rf ./extracted downloaded_file
+
+      - name: Copy single file if not zip
+        if: ${{ github.event.inputs.is_zip == 'false' }}
+        run: |
+          mv ./works/downloaded_file ./works/input/input.json
+
+      - name: Count input files
+        run: |
+          FILE_COUNT=$(ls ./works/input/*.json 2>/dev/null | wc -l | tr -d ' ')
+          echo "Found $FILE_COUNT JSON files to translate."
+          echo "FILE_COUNT=$FILE_COUNT" >> $GITHUB_ENV
+          if [ "$FILE_COUNT" -eq "0" ]; then
+            echo "Error: No JSON files found!"
+            exit 1
+          fi
+
+      - name: Translate files
+        env:
+          OR_API_KEY: ${{ secrets.OR_API_KEY }}
+        run: |
+          mkdir -p ./works/output
+          python3 ./scripts/trans-vi.py ./works/input ./works/output
+          echo "Translation completed!"
+
+      - name: Verify translated files
+        run: |
+          OUTPUT_COUNT=$(ls ./works/output/*.json 2>/dev/null | wc -l | tr -d ' ')
+          echo "Translated $OUTPUT_COUNT files."
+          echo "OUTPUT_COUNT=$OUTPUT_COUNT" >> $GITHUB_ENV
+          
+          if [ "$OUTPUT_COUNT" -eq "0" ]; then
+            echo "Warning: No files were translated!"
+            exit 1
+          fi
+          
+          echo "Sample translated files:"
+          ls -lh ./works/output/ | head -10
+
+      - name: Archive translated files
+        run: |
+          cd ./works/output
+          zip -r ../translated_vi_${{ github.run_number }}.zip *.json
+
+      - name: Save to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: ./works/translated_vi_${{ github.run_number }}.zip
+          name: translated-vietnamese-${{ github.run_number }}
+          tag_name: translate-vi-${{ github.run_number }}
+          body: |
+            🇻🇳 Vietnamese Translation - Run #${{ github.run_number }}
+            
+            **Input**: ${{ github.event.inputs.json_files_url }}
+            **Files translated**: ${{ env.OUTPUT_COUNT }}
+            **Workflow**: Translate to Vietnamese
+
